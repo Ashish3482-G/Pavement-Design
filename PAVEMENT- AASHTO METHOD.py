@@ -1,0 +1,279 @@
+import math
+
+def calculate_esal(vehicle_counts, equivalency_factors):
+    """
+    Calculate the total ESAL (Equivalent Single Axle Load) based on vehicle counts and their equivalency factors.
+    
+    :param vehicle_counts: A dictionary where keys are vehicle types (e.g., 'Heavy Truck') and values are the counts.
+    :param equivalency_factors: A dictionary where keys are vehicle types and values are their equivalency factors.
+    :return: Total ESAL value.
+    """
+    total_esal = 0
+    for vehicle_type, count in vehicle_counts.items():
+        if vehicle_type in equivalency_factors:
+            esal = count * equivalency_factors[vehicle_type]
+            total_esal += esal
+            print(f"{vehicle_type}: {count} vehicles * {equivalency_factors[vehicle_type]} factor = {esal} ESALs")
+    
+    return total_esal
+
+def calculate_resilient_modulus(cbr):
+    """
+    Calculate the Resilient Modulus (MR) of the subgrade soil based on the California Bearing Ratio (CBR).
+    
+    :param cbr: California Bearing Ratio (CBR) value
+    :return: Resilient Modulus (MR) in psi
+    """
+    mr = 1500 * cbr
+    return mr
+
+def get_standard_deviation():
+    """
+    Retrieve the standard deviation (So) used in flexible pavement design. 
+    This accounts for the variability in traffic projections and pavement material properties.
+    
+    :return: Standard deviation (So)
+    """
+    return 0.45
+
+def get_reliability_parameters(roadway_classification):
+    """
+    Obtain the level of reliability (R) and the corresponding standard normal deviate (ZR)
+    based on the roadway classification.
+    
+    :param roadway_classification: The type of roadway (e.g., 'Truck Route').
+    :return: A tuple containing the level of reliability (R) and ZR.
+    """
+    reliability_table = {
+        'Truck Route': (99.9, -3.090),
+        'Rural/Urban': (99.9, -3.090),
+        'Expressway': (99.9, -3.090),
+        'Main Road': (99.0, -2.327),
+        'Sector Road': (95.0, -1.645)
+    }
+    
+    return reliability_table.get(roadway_classification, (None, None))
+
+def get_serviceability_parameters(roadway_classification):
+    """
+    Retrieve the initial serviceability (po), terminal serviceability (pt), and design serviceability loss (ΔPSI)
+    based on the roadway classification.
+    
+    :param roadway_classification: The type of roadway (e.g., 'Truck Route').
+    :return: A tuple containing po, pt, and ΔPSI.
+    """
+    serviceability_table = {
+        'Truck Route': (4.2, 3.0, 1.2),
+        'Freeway': (4.2, 3.0, 1.2),
+        'Expressway': (4.2, 3.0, 1.2),
+        'Main Road': (4.1, 2.6, 1.5),
+        'Sector Road': (4.0, 2.4, 1.6)
+    }
+    
+    return serviceability_table.get(roadway_classification, (None, None, None))
+
+def calculate_log_w18(sn, mr, so, zr, delta_psi):
+    """
+    Calculate the logarithm (base 10) of the 18-kip Equivalent Single Axle Load (W18) 
+    using the AASHTO pavement design equation.
+    
+    :param sn: Structural Number (SN) determined in Step 6.
+    :param mr: Resilient Modulus (MR) in psi.
+    :param so: Standard Deviation (So) from Step 3.
+    :param zr: Standard Normal Deviate (ZR) from Step 4.
+    :param delta_psi: Design Serviceability Loss (ΔPSI) from Step 5.
+    :return: Logarithm (base 10) of the W18.
+    """
+    term1 = zr * so
+    term2 = 9.36 * math.log10(sn + 1) - 0.20
+    term3 = math.log10(delta_psi / (4.2 - 1.5))
+    term4 = 2.32 * math.log10(mr) - 8.07
+    term5 = 0.40 + (1094 / ((sn + 1) ** 5.19))
+    
+    log_w18 = term1 + term2 + (term3 / term5) + term4
+    return log_w18
+
+def trial_and_error_w18(target_w18, mr, so, zr, delta_psi, tolerance=0.01):
+    """
+    Determine the Structural Number (SN) using a trial-and-error approach to match the target W18.
+    
+    :param target_w18: Target ESAL value obtained in Step 1.
+    :param mr: Resilient Modulus (MR) in psi from Step 2.
+    :param so: Standard Deviation (So) from Step 3.
+    :param zr: Standard Normal Deviate (ZR) from Step 4.
+    :param delta_psi: Design Serviceability Loss (ΔPSI) from Step 5.
+    :param tolerance: Acceptable error margin for the W18 calculation.
+    :return: Estimated Structural Number (SN) that meets the target W18.
+    """
+    target_log_w18 = math.log10(target_w18)
+    sn_guess = 1.0  # Initial guess for SN
+    
+    # Incremental search to refine SN
+    step = 0.1
+    
+    while True:
+        calculated_log_w18 = calculate_log_w18(sn_guess, mr, so, zr, delta_psi)
+        error = abs(calculated_log_w18 - target_log_w18)
+        
+        if error < tolerance:
+            break
+        
+        # Adjust step based on the direction of the error
+        if calculated_log_w18 < target_log_w18:
+            sn_guess += step
+        else:
+            sn_guess -= step
+        
+        # Ensure SN does not become negative
+        if sn_guess < 0:
+            sn_guess = 0
+            
+        # Optionally refine step size for more precision
+        if error > tolerance * 10:
+            step = 0.1
+        else:
+            step = 0.01
+    
+    return sn_guess
+
+def calculate_layer_thicknesses(sn, material_coefficients, min_thicknesses):
+    """
+    Determine the layer thicknesses required to meet the specified Structural Number (SN).
+    
+    :param sn: Structural Number (SN) calculated in Step 6.
+    :param material_coefficients: Dictionary of material coefficients (a_i values).
+    :param min_thicknesses: Dictionary of minimum thicknesses for each layer.
+    :return: Dictionary of calculated thicknesses for each layer.
+    """
+    remaining_sn = sn
+    layer_thicknesses = {}
+
+    for material, coefficient in material_coefficients.items():
+        if material in min_thicknesses:
+            min_thickness = min_thicknesses[material]
+            # Calculate the thickness needed for this layer
+            thickness = max(min_thickness, remaining_sn / coefficient)
+            layer_thicknesses[material] = thickness
+            # Subtract the SN contributed by this layer from the remaining SN
+            remaining_sn -= coefficient * thickness
+
+    # Warning if the remaining SN is not zero, indicating an inability to fully allocate SN
+    if remaining_sn > 0:
+        print(f"Warning: Remaining SN of {remaining_sn:.2f} could not be allocated to layers.")
+    
+    return layer_thicknesses
+
+# Material coefficients for pavement layers (per cm)
+material_coefficients = {
+    'Asphaltic Concrete': 0.17,
+    'Aggregate Base': 0.05,
+    'Sand-Asphalt Base': 0.08,
+    'Soil Subbase': 0.04
+}
+
+# Minimum required thicknesses (in cm) for each layer
+min_thicknesses = {
+    'Asphaltic Concrete': 30,  # Minimum AC thickness for Truck Route
+    'Aggregate Base': 20,      # Minimum Aggregate Base thickness
+    'Sand-Asphalt Base': 10,   # Minimum Sand-Asphalt Base thickness
+    'Soil Subbase': 10         # Minimum Soil Subbase thickness
+}
+
+# Minimum Structural Number (SN) required based on roadway classification
+roadway_min_sn = {
+    'Truck Route': 7.9,
+    'Freeway': 6.9,
+    'Expressway': 6.9,
+    'Main Road': 4.9,
+    'Sector Road': 2.5,
+    'Low Volume': 2.0
+}
+
+
+def main():
+    # Main program execution
+    print("Step 1: Calculate ESAL")
+    # Equivalency factors for different vehicle types
+    equivalency_factors = {
+        'Heavy Truck': 6.5,
+        'Medium Truck': 1,
+        'Light Truck': 0.25,
+        'Automobile': 0.0008
+    }
+
+    # Prompt the user for the number of each vehicle type
+    vehicle_counts = {}
+    for vehicle_type in equivalency_factors.keys():
+        count = int(input(f"Enter the number of {vehicle_type}s: "))
+        vehicle_counts[vehicle_type] = count
+
+    # Calculate the total ESAL
+    total_esal = calculate_esal(vehicle_counts, equivalency_factors)
+    print(f"\nTotal ESAL: {total_esal}")
+
+    print("\nStep 2: Calculate Resilient Modulus")
+    # Prompt user for the CBR value
+    cbr_value = float(input("Enter the California Bearing Ratio (CBR) value: "))
+    resilient_modulus = calculate_resilient_modulus(cbr_value)
+    print(f"The Resilient Modulus (MR) is: {resilient_modulus} psi")
+
+    print("\nStep 3: Get Standard Deviation")
+    # Retrieve the overall standard deviation for flexible pavement design
+    overall_standard_deviation = get_standard_deviation()
+    print(f"The overall standard deviation (So) for flexible pavement design is: {overall_standard_deviation}")
+
+    print("\nStep 4: Get Level of Reliability")
+    # Display roadway classification options to the user
+    print("Please choose a roadway classification from the following options:")
+    print("1. Truck Route")
+    print("2. Rural/Urban")
+    print("3. Expressway")
+    print("4. Main Road")
+    print("5. Sector Road")
+    print("6. Low Volume")
+
+    # Prompt user to input the roadway classification
+    roadway_classification = input("Enter the roadway classification: ")
+
+    # Retrieve the reliability parameters based on the selected classification
+    reliability_level, zr_value = get_reliability_parameters(roadway_classification)
+    if reliability_level is not None:
+        print(f"For {roadway_classification}:")
+        print(f"  Level of Reliability (R) = {reliability_level}%")
+        print(f"  Standard Normal Deviate (ZR) = {zr_value}")
+    else:
+        print("Invalid roadway classification entered. Please check and try again.")
+
+    print("\nStep 5: Get Serviceability Parameters")
+    # Retrieve the serviceability parameters based on the selected classification
+    initial_serviceability, terminal_serviceability, delta_psi = get_serviceability_parameters(roadway_classification)
+    if initial_serviceability is not None:
+        print(f"For {roadway_classification}:")
+        print(f"  Initial Serviceability (p₀) = {initial_serviceability}")
+        print(f"  Terminal Serviceability (pₜ) = {terminal_serviceability}")
+        print(f"  Design Serviceability Loss (ΔPSI) = {delta_psi}")
+    else:
+        print("Invalid roadway classification entered. Please check and try again.")
+
+    # Step 6: Calculate the Structural Number (SN)
+    sn_value = trial_and_error_w18(total_esal, resilient_modulus, overall_standard_deviation, zr_value, delta_psi)
+    print(f"\nCalculated Structural Number (SN): {sn_value:.2f}")
+
+    # Step 7: Determine pavement and base thicknesses
+    min_sn_required = roadway_min_sn.get(roadway_classification, None)
+
+    if min_sn_required is None:
+        print("Invalid roadway classification entered. Please check and try again.")
+    else:
+        print(f"Minimum SN required for {roadway_classification}: {min_sn_required}")
+        
+        # Calculate the required layer thicknesses to meet the SN
+        layer_thicknesses = calculate_layer_thicknesses(sn_value, material_coefficients, min_thicknesses)
+        
+        # Display the calculated thicknesses for each layer
+        print("\nCalculated Layer Thicknesses:")
+        for material, thickness in layer_thicknesses.items():
+            print(f"{material}: {thickness:.2f} cm")
+
+if __name__ == "__main__":
+    main()
